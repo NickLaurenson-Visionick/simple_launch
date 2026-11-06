@@ -272,6 +272,7 @@ ros2 launch my_pkg system_launch.py launch_config:=dev.yaml
 | `enabled` | `false` leaves the node out of the launch, e.g. to run it from a debugger while the rest of the system runs |
 | `log_level` | `--log-level <logger>:=<level>` after the node's own arguments, so it wins over a level set in the launch file |
 | `required` | `true` shuts the whole launch down when the node exits, as `required` does in XML launch files |
+| `respawn`, `respawn_delay` | start the node again when it dies, after this many seconds. Without them, the node keeps the values of its launch file |
 | `prefix` | command the node is started with, e.g. `gdb -batch -ex run -ex bt --args` to log a backtrace when it crashes. Without it, the node keeps the prefix of its launch file, else `launch-prefix` |
 
 

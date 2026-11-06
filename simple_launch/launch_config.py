@@ -57,6 +57,9 @@ class NodeSettings:
     log_level: Optional[Text] = field(default=None, metadata={'type': str, 'choices': LOG_LEVELS})
     # true shuts the whole launch down when the node exits
     required: bool = field(default=False, metadata={'type': bool})
+    # true starts the node again when it dies, after respawn_delay seconds
+    respawn: Optional[bool] = field(default=None, metadata={'type': bool})
+    respawn_delay: Optional[float] = field(default=None, metadata={'type': (int, float)})
     # command the node is started with, e.g. 'gdb -batch -ex run -ex bt --args'
     prefix: Optional[Text] = field(default=None, metadata={'type': str})
     # patterns of the rules that matched the node, in file order
@@ -107,7 +110,8 @@ def check_settings(settings: dict, where: Text) -> None:
     for key, value in settings.items():
         expected = known[key].get('type')
         if expected is not None and not isinstance(value, expected):
-            raise RuntimeError(f'{where}: {key} must be a {expected.__name__}, not {value!r}')
+            names = '/'.join(t.__name__ for t in (expected if isinstance(expected, tuple) else (expected,)))
+            raise RuntimeError(f'{where}: {key} must be a {names}, not {value!r}')
         choices = known[key].get('choices')
         if choices is not None and str(value).lower() not in choices:
             raise RuntimeError(f'{where}: {key} must be one of {list(choices)}, not {value!r}')
@@ -201,6 +205,29 @@ class NodePrefix(Substitution):
         return context.launch_configurations.get('launch-prefix', '')
 
 
+class NodeRespawn(Substitution):
+    '''
+    Respawn flag of a ConfiguredNode: the one of its settings, else the one its launch file gives
+    '''
+
+    def __init__(self, given):
+        super().__init__()
+        self.__given = given
+        # set by the node, once created
+        self.node = None
+
+    def describe(self) -> Text:
+        return 'NodeRespawn()'
+
+    def perform(self, context: LaunchContext) -> Text:
+        settings = self.node.settings
+        if settings is not None and settings.respawn is not None:
+            return str(settings.respawn).lower()
+        if isinstance(self.__given, bool):
+            return str(self.__given).lower()
+        return perform_substitutions(context, normalize_to_list_of_substitutions(self.__given))
+
+
 class ConfiguredNode(Node):
     '''
     Node whose launch settings come from the launch_config file. They are resolved when the
@@ -209,8 +236,10 @@ class ConfiguredNode(Node):
 
     def __init__(self, *, executable, **kwargs):
         prefix = NodePrefix(kwargs.pop('prefix', None), executable)
-        super().__init__(executable=executable, prefix=prefix, **kwargs)
+        respawn = NodeRespawn(kwargs.pop('respawn', False))
+        super().__init__(executable=executable, prefix=prefix, respawn=respawn, **kwargs)
         prefix.node = self
+        respawn.node = self
         self.__executable = executable
         # the settings of this node, set when it starts
         self.settings = None
@@ -243,6 +272,10 @@ class ConfiguredNode(Node):
                 context._simple_launch_report = True
                 context.register_event_handler(OnShutdown(
                     on_shutdown=lambda event, context: report_unmatched_rules()))
+
+        if self.settings.respawn_delay is not None:
+            # launch takes the delay as a plain number at construction only
+            self._ExecuteLocal__respawn_delay = float(self.settings.respawn_delay)
 
         if self.settings.log_level:
             # given after the node's own arguments, so that it wins over them

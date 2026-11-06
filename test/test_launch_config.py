@@ -214,3 +214,35 @@ def test_describe_lists_the_changed_settings_and_the_rules(tmp_path):
     assert describe('/brain/mode_fsm', resolve(rules, '/brain/mode_fsm')) == \
         "/brain/mode_fsm: log_level='debug' (rules: *, /brain/*)"
     assert describe('/a', resolve([], '/a')) == '/a: defaults (rules: none)'
+
+
+@pytest.mark.parametrize('given, rule, expected', [
+    (False, {'respawn': True}, 'true'),
+    (True, {'respawn': False}, 'false'),
+    (True, {}, 'true'),
+    (False, {}, 'false'),
+])
+def test_respawn_of_the_settings_wins(tmp_path, given, rule, expected):
+    config = write_config(tmp_path, {'/sensing/*': rule})
+    node = ConfiguredNode(package='pkg', executable='exe', name='camera', respawn=given)
+    context = context_for(config, '/sensing')
+
+    node._configure(context)
+
+    # launch keeps the flag as a list of substitutions until the node starts
+    assert perform_substitutions(context, node._ExecuteLocal__respawn) == expected
+
+
+def test_respawn_delay_is_set(tmp_path):
+    config = write_config(tmp_path, {'/sensing/*': {'respawn': True, 'respawn_delay': 2}})
+    node = ConfiguredNode(package='pkg', executable='exe', name='camera', respawn_delay=0.5)
+    context = context_for(config, '/sensing')
+
+    node._configure(context)
+
+    assert node._ExecuteLocal__respawn_delay == 2.0
+
+
+def test_respawn_delay_must_be_a_number(tmp_path):
+    with pytest.raises(RuntimeError, match='must be a int/float'):
+        load_rules(write_config(tmp_path, {'*': {'respawn_delay': 'soon'}}))

@@ -49,6 +49,8 @@ class NodeSettings:
     Launch settings of one node. A setting no rule names keeps its default.
     '''
 
+    # false leaves the node out of the launch
+    enabled: bool = field(default=True, metadata={'type': bool})
     log_level: Optional[Text] = field(default=None, metadata={'type': str, 'choices': LOG_LEVELS})
     # command the node is started with, e.g. 'gdb -batch -ex run -ex bt --args'
     prefix: Optional[Text] = field(default=None, metadata={'type': str})
@@ -232,4 +234,8 @@ class ConfiguredNode(Node):
 
     def execute(self, context: LaunchContext):
         self._configure(context)
+        if not self.settings.enabled:
+            get_logger('simple_launch').info(
+                f'{ARG_NAME}: {self.full_name(context)} not started, enabled is false')
+            return None
         return super().execute(context)

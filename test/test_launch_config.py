@@ -168,3 +168,18 @@ def test_prefix_falls_back_to_the_launch_file_then_launch_prefix(tmp_path):
 
     context.launch_configurations['launch-prefix-filter'] = 'other_exe'
     assert prefix_of(plain, context) == ''
+
+
+def test_disabled_node_is_not_started(tmp_path):
+    config = write_config(tmp_path, {'/navigation/*': {'enabled': False}})
+    node = ConfiguredNode(package='pkg', executable='exe', name='ctrl')
+    context = context_for(config, '/navigation')
+
+    assert node.execute(context) is None
+    assert node.process_details is None
+    assert not node.settings.enabled
+
+
+def test_enabled_must_be_a_boolean(tmp_path):
+    with pytest.raises(RuntimeError, match='must be a bool'):
+        load_rules(write_config(tmp_path, {'*': {'enabled': 'no'}}))

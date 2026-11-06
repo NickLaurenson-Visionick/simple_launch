@@ -224,6 +224,60 @@ The current `use_sim_time` setting can be retrieved through `sl.sim_time` that m
 In all cases, if the `use_sim_time` parameter is explicitely given to a node, it will be used instead of the `SimpleLauncher` instance one.
 
 
+## Parameter override files
+
+Every node created with `sl.node` reads the `param_overrides` launch argument: a space-separated list of YAML parameter files that it loads after its own parameters.
+
+```bash
+ros2 launch my_pkg system_launch.py param_overrides:="fleet.yaml robot.yaml local.yaml"
+```
+
+- The files are merged in order, so a later file wins over an earlier one, and the result wins over the parameters given in the launch files.
+- Every top-level key must be `/**` or `/**/<node>`, so that a file applies under any namespace.
+- A missing file or a wrong key stops the launch. The merged file is written to the launch log directory, and its path is logged.
+- `SimpleLauncher` does not declare the argument, so that an included file cannot hide the default of the file that includes it. Declare it in the top-level launch file to give it a default or show it with `--show-args`:
+
+```python
+sl.declare_arg('param_overrides', default_value = sl.find('my_pkg', 'overrides.yaml'))
+```
+
+
+## Launch settings file
+
+The `launch_config` launch argument names a YAML file of launch settings for the nodes created with `sl.node`. It maps patterns on the full node name to settings:
+
+```yaml
+nodes:
+  '*':
+    log_level: info
+  /navigation/*:
+    log_level: debug
+  /navigation/controller_server:
+    log_level: error
+```
+
+```bash
+ros2 launch my_pkg system_launch.py launch_config:=dev.yaml
+```
+
+- Patterns are `fnmatch` patterns, where `*` also matches `/`. A node given no name is matched by its executable name.
+- Rules apply from top to bottom, and for each setting the last rule that matches and names it wins: put the catch-all first, then groups, then single nodes.
+- The settings are resolved when the node starts, so the namespaces pushed by including files are part of its name.
+- Like `param_overrides`, the argument is not declared by `SimpleLauncher`: declare it in the top-level file to give it a default.
+- `dry_run:=true` logs the settings each node created with `sl.node` would get and the rules that gave them, and starts none of them. Processes started otherwise still start: included launch files that do not use `SimpleLauncher`, and `ExecuteProcess` actions.
+- In a container created with `sl.container`, each component is matched by its own full name (its plugin class name when it has no name). `enabled` and `log_level` act on the component; the settings that act on a process (`prefix`, `required`, `respawn`, `debug`) apply to the container only.
+- An unknown setting or a value of the wrong type stops the launch. A rule that matched no node, often a mistyped pattern, is logged when the launch shuts down.
+
+| Setting | Effect |
+|---|---|
+| `debug` | `true` or `{port, host}`: the node starts in `gdbserver --once` (compiled) or `debugpy --wait-for-client` (Python), each on its usual port unless `port` is given, and waits for a debugger before `main()`. Turns respawn off. The host defaults to 127.0.0.1 |
+| `enabled` | `false` leaves the node out of the launch, e.g. to run it from a debugger while the rest of the system runs |
+| `log_level` | default level of the node's process, given after the node's own arguments so that it wins over a default level set in the launch file. A component in a container gets the level of its own logger instead. Also takes a mapping of logger names to levels, `default` being the process: `{default: info, rcl: error}` |
+| `required` | `true` shuts the whole launch down when the node exits, as `required` does in XML launch files |
+| `respawn`, `respawn_delay` | start the node again when it dies, after this many seconds. Without them, the node keeps the values of its launch file |
+| `prefix` | command the node is started with, e.g. `gdb -batch -ex run -ex bt --args` to log a backtrace when it crashes. Without it, the node keeps the prefix of its launch file, else `launch-prefix` |
+
+
 ## `OpaqueFunction` with implicit `.perform(context)`
 
 Most of the use cases can be dealt with substitutions and `with sl.group` blocks.

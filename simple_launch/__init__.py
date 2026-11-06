@@ -12,6 +12,8 @@ from .simple_substitution import SimpleSubstitution, flatten
 from .group import Group
 from . import console
 from .gazebo import only_show_args, silent_exec, GazeboBridge, ros_gz_prefix, gz_launch_setup
+from .param_overrides import MergedOverrides
+from .launch_config import ComponentEnabled, ConfiguredContainer, ConfiguredNode
 from typing import Text, List, Iterable, Tuple, Union
 
 NODE_REMAPS = LAUNCH_ARGS = 1
@@ -332,7 +334,7 @@ class SimpleLauncher:
                         target_container=name))
             else:
                 self.add_action(
-                    ComposableNodeContainer(
+                    ConfiguredContainer(
                         name=name,
                         namespace=namespace,
                         package=package,
@@ -391,14 +393,27 @@ class SimpleLauncher:
             else:
                 node_args['parameters'] = [{'use_sim_time': self.sim_time}]
 
+        # override files go last so that they win over the node's own parameters
+        params = node_args.get('parameters', [])
+        if not isinstance(params, list):
+            params = [params]
+        overrides = MergedOverrides()
+        node_args['parameters'] = params + [overrides]
+
         if as_composable:
             # check plugin name - add package if needed
             if '::' not in plugin:
                 plugin = '{}::{}'.format(package, plugin)
-            return self.add_action(ComposableNode(package=package, plugin=plugin, **node_args))
+            # its enabled setting is checked when the container loads it
+            condition = ComponentEnabled(node_args.pop('condition', None))
+            component = ComposableNode(package=package, plugin=plugin, condition=condition, **node_args)
+            condition.description = component
+            return self.add_action(component)
 
-        # basic node
-        return self.add_action(Node(package=package, executable=executable, **node_args))
+        # basic node, with the settings of the launch_config file
+        node = ConfiguredNode(package=package, executable=executable, **node_args)
+        overrides.node = node
+        return self.add_action(node)
 
     def log_info(self, msg):
         '''

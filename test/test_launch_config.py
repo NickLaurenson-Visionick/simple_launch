@@ -11,8 +11,8 @@ from launch.utilities import perform_substitutions
 
 from simple_launch import SimpleLauncher
 from simple_launch import launch_config
-from simple_launch.launch_config import (ConfiguredNode, load_rules, logger_name, resolve,
-                                         unmatched_rules)
+from simple_launch.launch_config import (ConfiguredNode, describe, load_rules, logger_name,
+                                         resolve, unmatched_rules)
 
 
 @pytest.fixture(autouse=True)
@@ -197,3 +197,20 @@ def test_required_node_shuts_the_launch_down(tmp_path, required):
 
     handlers = [h for h in context._event_handlers if isinstance(h, OnProcessExit)]
     assert len(handlers) == (1 if required else 0)
+
+
+def test_dry_run_starts_nothing(tmp_path):
+    context = context_for(write_config(tmp_path, {'*': {'log_level': 'info'}}), '/brain')
+    context.launch_configurations['dry_run'] = 'true'
+    node = ConfiguredNode(package='pkg', executable='exe', name='mode_fsm')
+
+    assert node.execute(context) is None
+    assert node.process_details is None
+
+
+def test_describe_lists_the_changed_settings_and_the_rules(tmp_path):
+    rules = load_rules(write_config(tmp_path, {'*': {}, '/brain/*': {'log_level': 'debug'}}))
+
+    assert describe('/brain/mode_fsm', resolve(rules, '/brain/mode_fsm')) == \
+        "/brain/mode_fsm: log_level='debug' (rules: *, /brain/*)"
+    assert describe('/a', resolve([], '/a')) == '/a: defaults (rules: none)'

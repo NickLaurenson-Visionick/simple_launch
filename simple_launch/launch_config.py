@@ -33,6 +33,8 @@ from launch.utilities import normalize_to_list_of_substitutions, perform_substit
 from launch_ros.actions import Node
 
 ARG_NAME = 'launch_config'
+# launch argument: true logs the settings of every node and starts none
+DRY_RUN_ARG = 'dry_run'
 
 # rules of each file already read by this launch process
 _rules_of_file: Dict[Text, List[Tuple[Text, dict]]] = {}
@@ -151,6 +153,18 @@ def resolve(rules: List[Tuple[Text, dict]], full_name: Text) -> NodeSettings:
     return settings
 
 
+def describe(full_name: Text, settings: NodeSettings) -> Text:
+    '''
+    Returns a one-line summary of the settings of a node: those that differ from the default,
+    then the rules that matched
+    '''
+    default = NodeSettings()
+    changed = [f'{f.name}={getattr(settings, f.name)!r}' for f in fields(NodeSettings)
+               if f.name != 'rules' and getattr(settings, f.name) != getattr(default, f.name)]
+    rules = ', '.join(settings.rules) or 'none'
+    return f'{full_name}: {" ".join(changed) or "defaults"} (rules: {rules})'
+
+
 def logger_name(full_name: Text) -> Text:
     '''
     Returns the logger name of a node, e.g. navigation.controller_server for /navigation/controller_server
@@ -237,6 +251,13 @@ class ConfiguredNode(Node):
 
     def execute(self, context: LaunchContext):
         self._configure(context)
+        dry_run = perform_substitutions(
+            context, [LaunchConfiguration(DRY_RUN_ARG, default='false')]).lower() == 'true'
+        summary = f'{ARG_NAME}: {describe(self.full_name(context), self.settings)}'
+        if dry_run:
+            get_logger('simple_launch').info(summary)
+            return None
+        get_logger('simple_launch').debug(summary)
         if not self.settings.enabled:
             get_logger('simple_launch').info(
                 f'{ARG_NAME}: {self.full_name(context)} not started, enabled is false')

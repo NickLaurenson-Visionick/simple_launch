@@ -264,6 +264,7 @@ ros2 launch my_pkg system_launch.py launch_config:=dev.yaml
 - Rules apply from top to bottom, and for each setting the last rule that matches and names it wins: put the catch-all first, then groups, then single nodes.
 - The settings are resolved when the node starts, so the namespaces pushed by including files are part of its name.
 - Like `param_overrides`, the argument is not declared by `SimpleLauncher`: declare it in the top-level file to give it a default.
+- `dry_run:=true` logs the settings each node would get and the rules that gave them, and starts no node.
 - An unknown setting or a value of the wrong type stops the launch. A rule that matched no node, often a mistyped pattern, is logged when the launch shuts down.
 
 | Setting | Effect |

@@ -220,14 +220,15 @@ def settings_of(context: LaunchContext, full_name: Text) -> NodeSettings:
     return settings
 
 
-def log_args(full_name: Text, settings: NodeSettings) -> List[List[TextSubstitution]]:
+def log_args(settings: NodeSettings, logger: Optional[Text] = None) -> List[List[TextSubstitution]]:
     '''
-    Returns the --log-level arguments of a node's settings, none if they set no level
+    Returns the --log-level arguments of a node's settings, none if they set no level.
+    Without a logger, the level is the default of the whole process, as for a node alone in it.
     '''
     if not settings.log_level:
         return []
-    return [[TextSubstitution(text='--log-level')],
-            [TextSubstitution(text=f'{logger_name(full_name)}:={settings.log_level}')]]
+    level = settings.log_level if logger is None else f'{logger}:={settings.log_level}'
+    return [[TextSubstitution(text='--log-level')], [TextSubstitution(text=level)]]
 
 
 def logger_name(full_name: Text) -> Text:
@@ -339,7 +340,7 @@ class ConfiguredNode(Node):
             self._ExecuteLocal__respawn_delay = float(self.settings.respawn_delay)
 
         # given after the node's own arguments, so that it wins over them
-        self.cmd.extend(log_args(full_name, self.settings))
+        self.cmd.extend(log_args(self.settings))
 
     def execute(self, context: LaunchContext):
         self._configure(context)
@@ -421,7 +422,8 @@ class ConfiguredContainer(ConfiguredNode, ComposableNodeContainer):
         for description in self.__components:
             full_name = component_full_name(context, description)
             settings = settings_of(context, full_name)
-            self.cmd.extend(log_args(full_name, settings))
+            # the components share the container's process: each gets its own logger's level
+            self.cmd.extend(log_args(settings, logger_name(full_name)))
             per_process = [key for key in ('prefix', 'required', 'respawn', 'debug')
                            if getattr(settings, key) not in (None, False)]
             if per_process:

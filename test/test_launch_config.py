@@ -100,7 +100,7 @@ def test_log_level_is_appended_after_the_node_arguments(tmp_path):
 
     node._configure(context)
 
-    assert command(node, context)[-2:] == ['--log-level', 'navigation.ctrl:=debug']
+    assert command(node, context)[-2:] == ['--log-level', 'debug']
     assert '--log-level' in command(node, context)[:-2]
 
 
@@ -311,8 +311,7 @@ def test_container_takes_the_log_levels_of_its_components(tmp_path):
     container._configure(context)
 
     args = command(container, context)
-    assert args[-4:] == ['--log-level', 'perception.perception_container:=warn',
-                         '--log-level', 'perception.detector:=debug']
+    assert args[-4:] == ['--log-level', 'warn', '--log-level', 'perception.detector:=debug']
 
 
 def test_disabled_component_is_not_loaded(tmp_path):

@@ -272,7 +272,7 @@ ros2 launch my_pkg system_launch.py launch_config:=dev.yaml
 |---|---|
 | `debug` | `true` or `{port, host}`: the node starts in `gdbserver --once` (compiled, port 3000) or `debugpy --wait-for-client` (Python, port 5678) and waits for a debugger before `main()`. Turns respawn off. The host defaults to 127.0.0.1 |
 | `enabled` | `false` leaves the node out of the launch, e.g. to run it from a debugger while the rest of the system runs |
-| `log_level` | `--log-level <logger>:=<level>` after the node's own arguments, so it wins over a level set in the launch file |
+| `log_level` | default level of the node's process, given after the node's own arguments so that it wins over a default level set in the launch file. A component in a container gets the level of its own logger instead |
 | `required` | `true` shuts the whole launch down when the node exits, as `required` does in XML launch files |
 | `respawn`, `respawn_delay` | start the node again when it dies, after this many seconds. Without them, the node keeps the values of its launch file |
 | `prefix` | command the node is started with, e.g. `gdb -batch -ex run -ex bt --args` to log a backtrace when it crashes. Without it, the node keeps the prefix of its launch file, else `launch-prefix` |

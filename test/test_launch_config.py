@@ -10,12 +10,15 @@ from launch.utilities import perform_substitutions
 
 from simple_launch import SimpleLauncher
 from simple_launch import launch_config
-from simple_launch.launch_config import ConfiguredNode, load_rules, logger_name, resolve
+from simple_launch.launch_config import (ConfiguredNode, load_rules, logger_name, resolve,
+                                         unmatched_rules)
 
 
 @pytest.fixture(autouse=True)
 def fresh_cache():
     launch_config._rules_of_file.clear()
+    launch_config._matched_patterns.clear()
+    launch_config._reported = False
 
 
 def write_config(tmp_path, nodes, name='launch.yaml'):
@@ -108,3 +111,29 @@ def test_node_without_matching_rule_is_unchanged(tmp_path):
     node._configure(context)
 
     assert '--log-level' not in command(node, context)
+
+
+@pytest.mark.parametrize('settings, message', [
+    ({'log_levle': 'debug'}, 'unknown settings'),
+    ({'log_level': 3}, 'must be a str'),
+    ({'log_level': 'loud'}, 'must be one of'),
+])
+def test_wrong_setting_is_refused(tmp_path, settings, message):
+    with pytest.raises(RuntimeError, match=message):
+        load_rules(write_config(tmp_path, {'*': settings}))
+
+
+def test_level_case_is_free(tmp_path):
+    assert load_rules(write_config(tmp_path, {'*': {'log_level': 'WARN'}}))
+
+
+def test_rules_that_matched_no_node_are_listed(tmp_path):
+    config = write_config(tmp_path, {
+        '/navigation/*': {'log_level': 'debug'},
+        '/navigaton/*': {'log_level': 'debug'},
+    })
+    context = context_for(config, '/navigation')
+
+    ConfiguredNode(package='pkg', executable='exe', name='ctrl')._configure(context)
+
+    assert [pattern for _, pattern in unmatched_rules()] == ['/navigaton/*']

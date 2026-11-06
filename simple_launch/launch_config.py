@@ -11,15 +11,20 @@ The file maps patterns on the full node name (fnmatch, where * also matches /) t
 
 Rules apply from top to bottom. For each setting, the last rule that matches the node and
 names that setting wins: put the catch-all first, then groups, then single nodes.
+
+An unknown setting or a value of the wrong type stops the launch. The rules that matched no
+node are logged when the launch shuts down, since that is how a mistyped pattern shows.
 '''
 
 import fnmatch
 import os
-from dataclasses import dataclass, fields
-from typing import Dict, List, Optional, Text, Tuple
+from dataclasses import dataclass, field, fields
+from typing import Dict, List, Optional, Set, Text, Tuple
 
 import yaml
+from launch.event_handlers import OnShutdown
 from launch.launch_context import LaunchContext
+from launch.logging import get_logger
 from launch.substitutions import LaunchConfiguration, TextSubstitution
 from launch.utilities import normalize_to_list_of_substitutions, perform_substitutions
 from launch_ros.actions import Node
@@ -28,6 +33,12 @@ ARG_NAME = 'launch_config'
 
 # rules of each file already read by this launch process
 _rules_of_file: Dict[Text, List[Tuple[Text, dict]]] = {}
+# patterns of each file that matched at least one node
+_matched_patterns: Dict[Text, Set[Text]] = {}
+# whether the unmatched rules were logged
+_reported = False
+
+LOG_LEVELS = ('debug', 'info', 'warn', 'error', 'fatal')
 
 
 @dataclass
@@ -36,7 +47,7 @@ class NodeSettings:
     Launch settings of one node. A setting no rule names keeps its default.
     '''
 
-    log_level: Optional[Text] = None
+    log_level: Optional[Text] = field(default=None, metadata={'type': str, 'choices': LOG_LEVELS})
     # patterns of the rules that matched the node, in file order
     rules: Tuple[Text, ...] = ()
 
@@ -68,8 +79,49 @@ def load_rules(path: Text) -> List[Tuple[Text, dict]]:
         raise RuntimeError(f'{ARG_NAME}: {path} must map "nodes" to pattern: settings entries')
 
     rules = [(str(pattern), settings) for pattern, settings in nodes.items()]
+    for pattern, settings in rules:
+        check_settings(settings, f'{ARG_NAME}: {path}, rule {pattern!r}')
     _rules_of_file[path] = rules
     return rules
+
+
+def check_settings(settings: dict, where: Text) -> None:
+    '''
+    Raises RuntimeError if a rule names an unknown setting or gives one a value of the wrong type
+    '''
+    known = {f.name: f.metadata for f in fields(NodeSettings) if f.name != 'rules'}
+    unknown = sorted(set(settings) - set(known))
+    if unknown:
+        raise RuntimeError(f'{where}: unknown settings {unknown}, known ones are {sorted(known)}')
+    for key, value in settings.items():
+        expected = known[key].get('type')
+        if expected is not None and not isinstance(value, expected):
+            raise RuntimeError(f'{where}: {key} must be a {expected.__name__}, not {value!r}')
+        choices = known[key].get('choices')
+        if choices is not None and str(value).lower() not in choices:
+            raise RuntimeError(f'{where}: {key} must be one of {list(choices)}, not {value!r}')
+
+
+def unmatched_rules() -> List[Tuple[Text, Text]]:
+    '''
+    Returns the (file, pattern) rules of the files read so far that matched no node
+    '''
+    return [(path, pattern) for path, rules in _rules_of_file.items() for pattern, _ in rules
+            if pattern not in _matched_patterns.get(path, set())]
+
+
+def report_unmatched_rules() -> None:
+    '''
+    Logs the rules that matched no node, once per launch process: a launch can shut down
+    several times over, e.g. when required nodes exit during the shutdown
+    '''
+    global _reported
+    if _reported:
+        return
+    _reported = True
+    logger = get_logger('simple_launch')
+    for path, pattern in unmatched_rules():
+        logger.info(f'{ARG_NAME}: rule {pattern!r} of {path} matched no node')
 
 
 def resolve(rules: List[Tuple[Text, dict]], full_name: Text) -> NodeSettings:
@@ -126,7 +178,17 @@ class ConfiguredNode(Node):
         '''
         path = perform_substitutions(context, [LaunchConfiguration(ARG_NAME, default='')])
         full_name = self.full_name(context)
-        self.settings = resolve(load_rules(path), full_name)
+        rules = load_rules(path)
+        self.settings = resolve(rules, full_name)
+
+        if rules:
+            path = os.path.abspath(os.path.expanduser(path))
+            _matched_patterns.setdefault(path, set()).update(self.settings.rules)
+            if not getattr(context, '_simple_launch_report', False):
+                # once per launch
+                context._simple_launch_report = True
+                context.register_event_handler(OnShutdown(
+                    on_shutdown=lambda event, context: report_unmatched_rules()))
 
         if self.settings.log_level:
             # given after the node's own arguments, so that it wins over them

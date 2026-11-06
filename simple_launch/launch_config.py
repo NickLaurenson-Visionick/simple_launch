@@ -176,8 +176,8 @@ def describe(full_name: Text, settings: NodeSettings) -> Text:
 def debug_prefix(package: Text, executable: Text, debug) -> Text:
     '''
     Returns the prefix that makes a node wait for a debugger before main(): gdbserver for a
-    compiled executable (default port 3000), debugpy for a Python one (default port 5678).
-    The default host 127.0.0.1 keeps the port off the network.
+    compiled executable, debugpy for a Python one, each on its usual port unless one is given.
+    The default host keeps the port off the network.
     '''
     debug = debug if isinstance(debug, dict) else {}
     host = debug.get('host', '127.0.0.1')

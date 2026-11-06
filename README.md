@@ -264,13 +264,13 @@ ros2 launch my_pkg system_launch.py launch_config:=dev.yaml
 - Rules apply from top to bottom, and for each setting the last rule that matches and names it wins: put the catch-all first, then groups, then single nodes.
 - The settings are resolved when the node starts, so the namespaces pushed by including files are part of its name.
 - Like `param_overrides`, the argument is not declared by `SimpleLauncher`: declare it in the top-level file to give it a default.
-- `dry_run:=true` logs the settings each node would get and the rules that gave them, and starts no node.
+- `dry_run:=true` logs the settings each node created with `sl.node` would get and the rules that gave them, and starts none of them. Processes started otherwise still start: included launch files that do not use `SimpleLauncher`, and `ExecuteProcess` actions.
 - In a container created with `sl.container`, each component is matched by its own full name (its plugin class name when it has no name). `enabled` and `log_level` act on the component; the settings that act on a process (`prefix`, `required`, `respawn`, `debug`) apply to the container only.
 - An unknown setting or a value of the wrong type stops the launch. A rule that matched no node, often a mistyped pattern, is logged when the launch shuts down.
 
 | Setting | Effect |
 |---|---|
-| `debug` | `true` or `{port, host}`: the node starts in `gdbserver --once` (compiled, port 3000) or `debugpy --wait-for-client` (Python, port 5678) and waits for a debugger before `main()`. Turns respawn off. The host defaults to 127.0.0.1 |
+| `debug` | `true` or `{port, host}`: the node starts in `gdbserver --once` (compiled) or `debugpy --wait-for-client` (Python), each on its usual port unless `port` is given, and waits for a debugger before `main()`. Turns respawn off. The host defaults to 127.0.0.1 |
 | `enabled` | `false` leaves the node out of the launch, e.g. to run it from a debugger while the rest of the system runs |
 | `log_level` | default level of the node's process, given after the node's own arguments so that it wins over a default level set in the launch file. A component in a container gets the level of its own logger instead |
 | `required` | `true` shuts the whole launch down when the node exits, as `required` does in XML launch files |

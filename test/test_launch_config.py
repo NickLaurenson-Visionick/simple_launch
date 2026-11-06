@@ -316,3 +316,18 @@ def test_disabled_component_is_not_loaded(tmp_path):
 
     components = container._ConfiguredContainer__components
     assert [c.condition().evaluate(context) for c in components] == [True, False]
+
+
+def test_respawn_delay_refuses_a_boolean(tmp_path):
+    with pytest.raises(RuntimeError, match='must be a int/float'):
+        load_rules(write_config(tmp_path, {'*': {'respawn_delay': True}}))
+
+
+def test_empty_debug_mapping_uses_the_defaults(tmp_path, fake_package):
+    config = write_config(tmp_path, {'/brain/*': {'debug': {}}})
+    node = ConfiguredNode(package='pkg', executable='cpp_exe', name='mode_fsm')
+    context = context_for(config, '/brain')
+
+    node._configure(context)
+
+    assert prefix_of(node, context).startswith('gdbserver --once 127.0.0.1:')

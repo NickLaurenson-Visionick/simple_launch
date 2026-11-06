@@ -103,8 +103,11 @@ def check_settings(settings: dict, where: Text) -> None:
         raise RuntimeError(f'{where}: unknown settings {unknown}, known ones are {sorted(known)}')
     for key, value in settings.items():
         expected = known[key].get('type')
-        if expected is not None and not isinstance(value, expected):
-            names = '/'.join(t.__name__ for t in (expected if isinstance(expected, tuple) else (expected,)))
+        types = expected if isinstance(expected, tuple) else (expected,)
+        # YAML true is also an int, but no number setting takes it
+        wrong_bool = isinstance(value, bool) and bool not in types
+        if expected is not None and (wrong_bool or not isinstance(value, types)):
+            names = '/'.join(t.__name__ for t in types)
             raise RuntimeError(f'{where}: {key} must be a {names}, not {value!r}')
         keys = known[key].get('keys')
         if keys is not None and isinstance(value, dict) and set(value) - set(keys):
@@ -318,7 +321,8 @@ class ConfiguredNode(Node):
         full_name = self.full_name(context)
         self.settings = settings_of(context, full_name)
 
-        if self.settings.debug:
+        # an empty {port, host} mapping asks for the defaults
+        if self.settings.debug not in (None, False):
             executable = perform_substitutions(
                 context, normalize_to_list_of_substitutions(self.__executable))
             self.settings.prefix = debug_prefix(self.__package, executable, self.settings.debug)

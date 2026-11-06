@@ -23,7 +23,8 @@ from dataclasses import dataclass, field, fields
 from typing import Dict, List, Optional, Set, Text, Tuple
 
 import yaml
-from launch.event_handlers import OnShutdown
+from launch.actions import Shutdown
+from launch.event_handlers import OnProcessExit, OnShutdown
 from launch import Substitution
 from launch.launch_context import LaunchContext
 from launch.logging import get_logger
@@ -52,6 +53,8 @@ class NodeSettings:
     # false leaves the node out of the launch
     enabled: bool = field(default=True, metadata={'type': bool})
     log_level: Optional[Text] = field(default=None, metadata={'type': str, 'choices': LOG_LEVELS})
+    # true shuts the whole launch down when the node exits
+    required: bool = field(default=False, metadata={'type': bool})
     # command the node is started with, e.g. 'gdb -batch -ex run -ex bt --args'
     prefix: Optional[Text] = field(default=None, metadata={'type': str})
     # patterns of the rules that matched the node, in file order
@@ -238,4 +241,14 @@ class ConfiguredNode(Node):
             get_logger('simple_launch').info(
                 f'{ARG_NAME}: {self.full_name(context)} not started, enabled is false')
             return None
+        self._supervise(context)
         return super().execute(context)
+
+    def _supervise(self, context: LaunchContext) -> None:
+        '''
+        Shuts the launch down when this node exits, if its settings say it is required
+        '''
+        if self.settings.required:
+            reason = f'{self.full_name(context)} exited and is required'
+            context.register_event_handler(OnProcessExit(
+                target_action=self, on_exit=[Shutdown(reason=reason)]))

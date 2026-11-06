@@ -6,6 +6,7 @@ Run with: python3 -m pytest test/test_launch_config.py
 import pytest
 import yaml
 from launch import LaunchContext
+from launch.event_handlers import OnProcessExit
 from launch.utilities import perform_substitutions
 
 from simple_launch import SimpleLauncher
@@ -183,3 +184,16 @@ def test_disabled_node_is_not_started(tmp_path):
 def test_enabled_must_be_a_boolean(tmp_path):
     with pytest.raises(RuntimeError, match='must be a bool'):
         load_rules(write_config(tmp_path, {'*': {'enabled': 'no'}}))
+
+
+@pytest.mark.parametrize('required', [True, False])
+def test_required_node_shuts_the_launch_down(tmp_path, required):
+    config = write_config(tmp_path, {'/brain/*': {'required': required}})
+    node = ConfiguredNode(package='pkg', executable='exe', name='mode_fsm')
+    context = context_for(config, '/brain')
+
+    node._configure(context)
+    node._supervise(context)
+
+    handlers = [h for h in context._event_handlers if isinstance(h, OnProcessExit)]
+    assert len(handlers) == (1 if required else 0)

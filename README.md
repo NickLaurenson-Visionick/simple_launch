@@ -265,6 +265,7 @@ ros2 launch my_pkg system_launch.py launch_config:=dev.yaml
 - The settings are resolved when the node starts, so the namespaces pushed by including files are part of its name.
 - Like `param_overrides`, the argument is not declared by `SimpleLauncher`: declare it in the top-level file to give it a default.
 - `dry_run:=true` logs the settings each node would get and the rules that gave them, and starts no node.
+- In a container created with `sl.container`, each component is matched by its own full name (its plugin class name when it has no name). `enabled` and `log_level` act on the component; the settings that act on a process (`prefix`, `required`, `respawn`, `debug`) apply to the container only.
 - An unknown setting or a value of the wrong type stops the launch. A rule that matched no node, often a mistyped pattern, is logged when the launch shuts down.
 
 | Setting | Effect |

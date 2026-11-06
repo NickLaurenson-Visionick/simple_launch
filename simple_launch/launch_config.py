@@ -27,11 +27,13 @@ from ament_index_python.packages import get_package_prefix
 from launch.actions import Shutdown
 from launch.event_handlers import OnProcessExit, OnShutdown
 from launch import Substitution
+from launch.condition import Condition
 from launch.launch_context import LaunchContext
 from launch.logging import get_logger
 from launch.substitutions import LaunchConfiguration, TextSubstitution
 from launch.utilities import normalize_to_list_of_substitutions, perform_substitutions
-from launch_ros.actions import Node
+from launch_ros.actions import ComposableNodeContainer, Node
+from launch_ros.descriptions import ComposableNode
 
 ARG_NAME = 'launch_config'
 # launch argument: true logs the settings of every node and starts none
@@ -191,6 +193,43 @@ def debug_prefix(package: Text, executable: Text, debug) -> Text:
     return f'python3 -m debugpy --listen {host}:{debug.get("port", 5678)} --wait-for-client'
 
 
+def is_dry_run(context: LaunchContext) -> bool:
+    '''
+    Returns whether the dry_run launch argument is true
+    '''
+    return perform_substitutions(
+        context, [LaunchConfiguration(DRY_RUN_ARG, default='false')]).lower() == 'true'
+
+
+def settings_of(context: LaunchContext, full_name: Text) -> NodeSettings:
+    '''
+    Returns the settings of a node from the launch_config file of this launch, and records
+    which rules matched it
+    '''
+    path = perform_substitutions(context, [LaunchConfiguration(ARG_NAME, default='')])
+    rules = load_rules(path)
+    settings = resolve(rules, full_name)
+    if rules:
+        path = os.path.abspath(os.path.expanduser(path))
+        _matched_patterns.setdefault(path, set()).update(settings.rules)
+        if not getattr(context, '_simple_launch_report', False):
+            # once per launch
+            context._simple_launch_report = True
+            context.register_event_handler(OnShutdown(
+                on_shutdown=lambda event, context: report_unmatched_rules()))
+    return settings
+
+
+def log_args(full_name: Text, settings: NodeSettings) -> List[List[TextSubstitution]]:
+    '''
+    Returns the --log-level arguments of a node's settings, none if they set no level
+    '''
+    if not settings.log_level:
+        return []
+    return [[TextSubstitution(text='--log-level')],
+            [TextSubstitution(text=f'{logger_name(full_name)}:={settings.log_level}')]]
+
+
 def logger_name(full_name: Text) -> Text:
     '''
     Returns the logger name of a node, e.g. navigation.controller_server for /navigation/controller_server
@@ -283,19 +322,8 @@ class ConfiguredNode(Node):
         '''
         Resolves the settings of this node and applies them to its command
         '''
-        path = perform_substitutions(context, [LaunchConfiguration(ARG_NAME, default='')])
         full_name = self.full_name(context)
-        rules = load_rules(path)
-        self.settings = resolve(rules, full_name)
-
-        if rules:
-            path = os.path.abspath(os.path.expanduser(path))
-            _matched_patterns.setdefault(path, set()).update(self.settings.rules)
-            if not getattr(context, '_simple_launch_report', False):
-                # once per launch
-                context._simple_launch_report = True
-                context.register_event_handler(OnShutdown(
-                    on_shutdown=lambda event, context: report_unmatched_rules()))
+        self.settings = settings_of(context, full_name)
 
         if self.settings.debug:
             executable = perform_substitutions(
@@ -310,15 +338,12 @@ class ConfiguredNode(Node):
             # launch takes the delay as a plain number at construction only
             self._ExecuteLocal__respawn_delay = float(self.settings.respawn_delay)
 
-        if self.settings.log_level:
-            # given after the node's own arguments, so that it wins over them
-            self.cmd.extend([[TextSubstitution(text='--log-level')],
-                             [TextSubstitution(text=f'{logger_name(full_name)}:={self.settings.log_level}')]])
+        # given after the node's own arguments, so that it wins over them
+        self.cmd.extend(log_args(full_name, self.settings))
 
     def execute(self, context: LaunchContext):
         self._configure(context)
-        dry_run = perform_substitutions(
-            context, [LaunchConfiguration(DRY_RUN_ARG, default='false')]).lower() == 'true'
+        dry_run = is_dry_run(context)
         summary = f'{ARG_NAME}: {describe(self.full_name(context), self.settings)}'
         if dry_run:
             get_logger('simple_launch').info(summary)
@@ -339,3 +364,71 @@ class ConfiguredNode(Node):
             reason = f'{self.full_name(context)} exited and is required'
             context.register_event_handler(OnProcessExit(
                 target_action=self, on_exit=[Shutdown(reason=reason)]))
+
+
+def component_full_name(context: LaunchContext, description: ComposableNode) -> Text:
+    '''
+    Returns the full name of a composable node, as its container will load it. A component
+    given no name is matched by the class name of its plugin.
+    '''
+    namespace = ''
+    if description.node_namespace is not None:
+        namespace = perform_substitutions(context, description.node_namespace)
+    if not namespace.startswith('/'):
+        namespace = (context.launch_configurations.get('ros_namespace') or '') + '/' + namespace
+    if description.node_name is not None:
+        name = perform_substitutions(context, description.node_name)
+    else:
+        name = perform_substitutions(context, description.node_plugin).split('::')[-1]
+    return '/' + '/'.join(part for part in (namespace + '/' + name).split('/') if part)
+
+
+class ComponentEnabled(Condition):
+    '''
+    Condition of a composable node: the condition it was given, and its enabled setting
+    '''
+
+    def __init__(self, given: Optional[Condition] = None):
+        super().__init__(predicate=self.__evaluate)
+        self.__given = given
+        # set by SimpleLauncher.node(), once the description exists
+        self.description = None
+
+    def __evaluate(self, context: LaunchContext) -> bool:
+        if self.__given is not None and not self.__given.evaluate(context):
+            return False
+        full_name = component_full_name(context, self.description)
+        if not settings_of(context, full_name).enabled:
+            get_logger('simple_launch').info(f'{ARG_NAME}: {full_name} not loaded, enabled is false')
+            return False
+        return True
+
+
+class ConfiguredContainer(ConfiguredNode, ComposableNodeContainer):
+    '''
+    Container whose own settings come from the launch_config file, like a ConfiguredNode.
+    The log levels of its components are given to its process, which holds their loggers.
+    Settings that act on a process (prefix, required, respawn, debug) apply only to the container.
+    '''
+
+    def __init__(self, *, composable_node_descriptions=None, **kwargs):
+        super().__init__(composable_node_descriptions=composable_node_descriptions, **kwargs)
+        self.__components = composable_node_descriptions or []
+
+    def _configure(self, context: LaunchContext) -> None:
+        super()._configure(context)
+        logger = get_logger('simple_launch')
+        for description in self.__components:
+            full_name = component_full_name(context, description)
+            settings = settings_of(context, full_name)
+            self.cmd.extend(log_args(full_name, settings))
+            per_process = [key for key in ('prefix', 'required', 'respawn', 'debug')
+                           if getattr(settings, key) not in (None, False)]
+            if per_process:
+                logger.warning(f'{ARG_NAME}: {full_name} is a component, {per_process} '
+                               'apply to its container only')
+            summary = f'{ARG_NAME}: {describe(full_name, settings)}, in {self.full_name(context)}'
+            if is_dry_run(context):
+                logger.info(summary)
+            else:
+                logger.debug(summary)

@@ -276,3 +276,50 @@ def test_debug_picks_the_debugger_and_stops_respawn(tmp_path, fake_package, exec
 def test_debug_takes_only_port_and_host(tmp_path):
     with pytest.raises(RuntimeError, match='takes only'):
         load_rules(write_config(tmp_path, {'*': {'debug': {'prot': 3000}}}))
+
+
+def container_with(sl_setup):
+    sl = SimpleLauncher()
+    with sl.container('perception_container', package='rclcpp_components'):
+        sl_setup(sl)
+    return [a for a in sl.launch_description().entities
+            if isinstance(a, launch_config.ConfiguredContainer)][0]
+
+
+def test_component_full_name_uses_the_pushed_namespace():
+    from launch_ros.descriptions import ComposableNode
+    context = context_for('', '/perception')
+
+    named = ComposableNode(package='pkg', plugin='pkg::Detector', name='detector')
+    unnamed = ComposableNode(package='pkg', plugin='pkg::Detector')
+    absolute = ComposableNode(package='pkg', plugin='pkg::Detector', name='d', namespace='/other')
+
+    assert launch_config.component_full_name(context, named) == '/perception/detector'
+    assert launch_config.component_full_name(context, unnamed) == '/perception/Detector'
+    assert launch_config.component_full_name(context, absolute) == '/other/d'
+
+
+def test_container_takes_the_log_levels_of_its_components(tmp_path):
+    config = write_config(tmp_path, {
+        '/perception/detector': {'log_level': 'debug'},
+        '/perception/perception_container': {'log_level': 'warn'},
+    })
+    container = container_with(lambda sl: (sl.node('pkg', plugin='Detector', name='detector'),
+                                           sl.node('pkg', plugin='Tracker', name='tracker')))
+    context = context_for(config, '/perception')
+
+    container._configure(context)
+
+    args = command(container, context)
+    assert args[-4:] == ['--log-level', 'perception.perception_container:=warn',
+                         '--log-level', 'perception.detector:=debug']
+
+
+def test_disabled_component_is_not_loaded(tmp_path):
+    config = write_config(tmp_path, {'/perception/tracker': {'enabled': False}})
+    container = container_with(lambda sl: (sl.node('pkg', plugin='Detector', name='detector'),
+                                           sl.node('pkg', plugin='Tracker', name='tracker')))
+    context = context_for(config, '/perception')
+
+    components = container._ConfiguredContainer__components
+    assert [c.condition().evaluate(context) for c in components] == [True, False]

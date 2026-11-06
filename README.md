@@ -269,6 +269,7 @@ ros2 launch my_pkg system_launch.py launch_config:=dev.yaml
 
 | Setting | Effect |
 |---|---|
+| `debug` | `true` or `{port, host}`: the node starts in `gdbserver --once` (compiled, port 3000) or `debugpy --wait-for-client` (Python, port 5678) and waits for a debugger before `main()`. Turns respawn off. The host defaults to 127.0.0.1 |
 | `enabled` | `false` leaves the node out of the launch, e.g. to run it from a debugger while the rest of the system runs |
 | `log_level` | `--log-level <logger>:=<level>` after the node's own arguments, so it wins over a level set in the launch file |
 | `required` | `true` shuts the whole launch down when the node exits, as `required` does in XML launch files |

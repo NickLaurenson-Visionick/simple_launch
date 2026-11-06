@@ -23,6 +23,7 @@ from dataclasses import dataclass, field, fields
 from typing import Dict, List, Optional, Set, Text, Tuple
 
 import yaml
+from ament_index_python.packages import get_package_prefix
 from launch.actions import Shutdown
 from launch.event_handlers import OnProcessExit, OnShutdown
 from launch import Substitution
@@ -62,6 +63,8 @@ class NodeSettings:
     respawn_delay: Optional[float] = field(default=None, metadata={'type': (int, float)})
     # command the node is started with, e.g. 'gdb -batch -ex run -ex bt --args'
     prefix: Optional[Text] = field(default=None, metadata={'type': str})
+    # true or {port, host}: the node waits for a debugger before main(), see debug_prefix()
+    debug: object = field(default=None, metadata={'type': (bool, dict), 'keys': ('port', 'host')})
     # patterns of the rules that matched the node, in file order
     rules: Tuple[Text, ...] = ()
 
@@ -112,6 +115,9 @@ def check_settings(settings: dict, where: Text) -> None:
         if expected is not None and not isinstance(value, expected):
             names = '/'.join(t.__name__ for t in (expected if isinstance(expected, tuple) else (expected,)))
             raise RuntimeError(f'{where}: {key} must be a {names}, not {value!r}')
+        keys = known[key].get('keys')
+        if keys is not None and isinstance(value, dict) and set(value) - set(keys):
+            raise RuntimeError(f'{where}: {key} takes only {list(keys)}, not {sorted(value)}')
         choices = known[key].get('choices')
         if choices is not None and str(value).lower() not in choices:
             raise RuntimeError(f'{where}: {key} must be one of {list(choices)}, not {value!r}')
@@ -167,6 +173,22 @@ def describe(full_name: Text, settings: NodeSettings) -> Text:
                if f.name != 'rules' and getattr(settings, f.name) != getattr(default, f.name)]
     rules = ', '.join(settings.rules) or 'none'
     return f'{full_name}: {" ".join(changed) or "defaults"} (rules: {rules})'
+
+
+def debug_prefix(package: Text, executable: Text, debug) -> Text:
+    '''
+    Returns the prefix that makes a node wait for a debugger before main(): gdbserver for a
+    compiled executable (default port 3000), debugpy for a Python one (default port 5678).
+    The default host 127.0.0.1 keeps the port off the network.
+    '''
+    debug = debug if isinstance(debug, dict) else {}
+    host = debug.get('host', '127.0.0.1')
+    path = os.path.join(get_package_prefix(package), 'lib', package, executable)
+    with open(path, 'rb') as f:
+        compiled = f.read(4) == b'\x7fELF'
+    if compiled:
+        return f'gdbserver --once {host}:{debug.get("port", 3000)}'
+    return f'python3 -m debugpy --listen {host}:{debug.get("port", 5678)} --wait-for-client'
 
 
 def logger_name(full_name: Text) -> Text:
@@ -234,10 +256,12 @@ class ConfiguredNode(Node):
     node starts, because only then is its full name known (namespaces pushed by including files).
     '''
 
-    def __init__(self, *, executable, **kwargs):
+    def __init__(self, *, executable, package=None, **kwargs):
         prefix = NodePrefix(kwargs.pop('prefix', None), executable)
         respawn = NodeRespawn(kwargs.pop('respawn', False))
-        super().__init__(executable=executable, prefix=prefix, respawn=respawn, **kwargs)
+        super().__init__(executable=executable, package=package, prefix=prefix, respawn=respawn,
+                         **kwargs)
+        self.__package = package
         prefix.node = self
         respawn.node = self
         self.__executable = executable
@@ -272,6 +296,15 @@ class ConfiguredNode(Node):
                 context._simple_launch_report = True
                 context.register_event_handler(OnShutdown(
                     on_shutdown=lambda event, context: report_unmatched_rules()))
+
+        if self.settings.debug:
+            executable = perform_substitutions(
+                context, normalize_to_list_of_substitutions(self.__executable))
+            self.settings.prefix = debug_prefix(self.__package, executable, self.settings.debug)
+            # a node stopped in a debugger must not come back by itself
+            self.settings.respawn = False
+            get_logger('simple_launch').info(
+                f'{ARG_NAME}: {full_name} waits for a debugger: {self.settings.prefix}')
 
         if self.settings.respawn_delay is not None:
             # launch takes the delay as a plain number at construction only

@@ -246,3 +246,33 @@ def test_respawn_delay_is_set(tmp_path):
 def test_respawn_delay_must_be_a_number(tmp_path):
     with pytest.raises(RuntimeError, match='must be a int/float'):
         load_rules(write_config(tmp_path, {'*': {'respawn_delay': 'soon'}}))
+
+
+@pytest.fixture
+def fake_package(tmp_path, monkeypatch):
+    lib = tmp_path / 'lib' / 'pkg'
+    lib.mkdir(parents=True)
+    (lib / 'cpp_exe').write_bytes(b'\x7fELF' + bytes(12))
+    (lib / 'py_exe').write_text('#!/usr/bin/python3\n')
+    monkeypatch.setattr(launch_config, 'get_package_prefix', lambda package: str(tmp_path))
+
+
+@pytest.mark.parametrize('executable, debug, prefix', [
+    ('cpp_exe', True, 'gdbserver --once 127.0.0.1:3000'),
+    ('py_exe', True, 'python3 -m debugpy --listen 127.0.0.1:5678 --wait-for-client'),
+    ('cpp_exe', {'port': 3001, 'host': '0.0.0.0'}, 'gdbserver --once 0.0.0.0:3001'),
+])
+def test_debug_picks_the_debugger_and_stops_respawn(tmp_path, fake_package, executable, debug, prefix):
+    config = write_config(tmp_path, {'/brain/*': {'respawn': True, 'debug': debug}})
+    node = ConfiguredNode(package='pkg', executable=executable, name='mode_fsm')
+    context = context_for(config, '/brain')
+
+    node._configure(context)
+
+    assert prefix_of(node, context) == prefix
+    assert perform_substitutions(context, node._ExecuteLocal__respawn) == 'false'
+
+
+def test_debug_takes_only_port_and_host(tmp_path):
+    with pytest.raises(RuntimeError, match='takes only'):
+        load_rules(write_config(tmp_path, {'*': {'debug': {'prot': 3000}}}))

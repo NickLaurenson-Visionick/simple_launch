@@ -137,3 +137,34 @@ def test_rules_that_matched_no_node_are_listed(tmp_path):
     ConfiguredNode(package='pkg', executable='exe', name='ctrl')._configure(context)
 
     assert [pattern for _, pattern in unmatched_rules()] == ['/navigaton/*']
+
+
+def prefix_of(node, context):
+    return perform_substitutions(context, node.process_description.prefix)
+
+
+def test_prefix_of_the_settings_wins(tmp_path):
+    config = write_config(tmp_path, {'/navigation/ctrl': {'prefix': 'gdb -batch -ex run -ex bt --args'}})
+    node = ConfiguredNode(package='pkg', executable='exe', name='ctrl', prefix='valgrind')
+    context = context_for(config, '/navigation')
+
+    node._configure(context)
+
+    assert prefix_of(node, context) == 'gdb -batch -ex run -ex bt --args'
+
+
+def test_prefix_falls_back_to_the_launch_file_then_launch_prefix(tmp_path):
+    config = write_config(tmp_path, {'/other': {'prefix': 'perf record'}})
+    context = context_for(config, '/navigation')
+    context.launch_configurations['launch-prefix'] = 'xterm -e'
+
+    given = ConfiguredNode(package='pkg', executable='exe', name='ctrl', prefix='valgrind')
+    given._configure(context)
+    assert prefix_of(given, context) == 'valgrind'
+
+    plain = ConfiguredNode(package='pkg', executable='exe', name='ctrl')
+    plain._configure(context)
+    assert prefix_of(plain, context) == 'xterm -e'
+
+    context.launch_configurations['launch-prefix-filter'] = 'other_exe'
+    assert prefix_of(plain, context) == ''

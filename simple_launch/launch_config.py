@@ -18,11 +18,13 @@ node are logged when the launch shuts down, since that is how a mistyped pattern
 
 import fnmatch
 import os
+import re
 from dataclasses import dataclass, field, fields
 from typing import Dict, List, Optional, Set, Text, Tuple
 
 import yaml
 from launch.event_handlers import OnShutdown
+from launch import Substitution
 from launch.launch_context import LaunchContext
 from launch.logging import get_logger
 from launch.substitutions import LaunchConfiguration, TextSubstitution
@@ -48,6 +50,8 @@ class NodeSettings:
     '''
 
     log_level: Optional[Text] = field(default=None, metadata={'type': str, 'choices': LOG_LEVELS})
+    # command the node is started with, e.g. 'gdb -batch -ex run -ex bt --args'
+    prefix: Optional[Text] = field(default=None, metadata={'type': str})
     # patterns of the rules that matched the node, in file order
     rules: Tuple[Text, ...] = ()
 
@@ -149,6 +153,35 @@ def logger_name(full_name: Text) -> Text:
     return full_name.strip('/').replace('/', '.')
 
 
+class NodePrefix(Substitution):
+    '''
+    Prefix of a ConfiguredNode: the one of its settings, else the one its launch file gives,
+    else the launch-prefix launch configuration filtered by launch-prefix-filter, as launch_ros does
+    '''
+
+    def __init__(self, given, executable):
+        super().__init__()
+        self.__given = None if given is None else normalize_to_list_of_substitutions(given)
+        self.__executable = normalize_to_list_of_substitutions(executable)
+        # set by the node, once created
+        self.node = None
+
+    def describe(self) -> Text:
+        return 'NodePrefix()'
+
+    def perform(self, context: LaunchContext) -> Text:
+        settings = self.node.settings
+        if settings is not None and settings.prefix:
+            return settings.prefix
+        if self.__given is not None:
+            return perform_substitutions(context, self.__given)
+        prefix_filter = context.launch_configurations.get('launch-prefix-filter', '')
+        executable = os.path.basename(perform_substitutions(context, self.__executable))
+        if prefix_filter and re.match(prefix_filter, executable) is None:
+            return ''
+        return context.launch_configurations.get('launch-prefix', '')
+
+
 class ConfiguredNode(Node):
     '''
     Node whose launch settings come from the launch_config file. They are resolved when the
@@ -156,7 +189,9 @@ class ConfiguredNode(Node):
     '''
 
     def __init__(self, *, executable, **kwargs):
-        super().__init__(executable=executable, **kwargs)
+        prefix = NodePrefix(kwargs.pop('prefix', None), executable)
+        super().__init__(executable=executable, prefix=prefix, **kwargs)
+        prefix.node = self
         self.__executable = executable
         # the settings of this node, set when it starts
         self.settings = None

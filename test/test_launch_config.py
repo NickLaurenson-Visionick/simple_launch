@@ -15,13 +15,6 @@ from simple_launch.launch_config import (ConfiguredNode, describe, load_rules, l
                                          resolve, unmatched_rules)
 
 
-@pytest.fixture(autouse=True)
-def fresh_cache():
-    launch_config._rules_of_file.clear()
-    launch_config._matched_patterns.clear()
-    launch_config._reported = False
-
-
 def write_config(tmp_path, nodes, name='launch.yaml'):
     path = tmp_path / name
     path.write_text(yaml.safe_dump({'nodes': nodes}, sort_keys=False))
@@ -137,7 +130,8 @@ def test_rules_that_matched_no_node_are_listed(tmp_path):
 
     ConfiguredNode(package='pkg', executable='exe', name='ctrl')._configure(context)
 
-    assert [pattern for _, pattern in unmatched_rules()] == ['/navigaton/*']
+    state = launch_config.launch_state(context)
+    assert [pattern for _, pattern in unmatched_rules(state)] == ['/navigaton/*']
 
 
 def prefix_of(node, context):

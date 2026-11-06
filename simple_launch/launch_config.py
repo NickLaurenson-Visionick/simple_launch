@@ -39,13 +39,6 @@ ARG_NAME = 'launch_config'
 # launch argument: true logs the settings of every node and starts none
 DRY_RUN_ARG = 'dry_run'
 
-# rules of each file already read by this launch process
-_rules_of_file: Dict[Text, List[Tuple[Text, dict]]] = {}
-# patterns of each file that matched at least one node
-_matched_patterns: Dict[Text, Set[Text]] = {}
-# whether the unmatched rules were logged
-_reported = False
-
 LOG_LEVELS = ('debug', 'info', 'warn', 'error', 'fatal')
 
 
@@ -80,15 +73,12 @@ def setting_names() -> List[Text]:
 
 def load_rules(path: Text) -> List[Tuple[Text, dict]]:
     '''
-    Returns the (pattern, settings) rules of a launch config file, read once per process.
+    Returns the (pattern, settings) rules of a launch config file.
     An empty path gives no rules. Raises RuntimeError on a missing file or a wrong layout.
     '''
     if not path:
         return []
     path = os.path.abspath(os.path.expanduser(path))
-    if path in _rules_of_file:
-        return _rules_of_file[path]
-
     if not os.path.isfile(path):
         raise RuntimeError(f'{ARG_NAME}: file not found: {path}')
     with open(path) as f:
@@ -100,7 +90,6 @@ def load_rules(path: Text) -> List[Tuple[Text, dict]]:
     rules = [(str(pattern), settings) for pattern, settings in nodes.items()]
     for pattern, settings in rules:
         check_settings(settings, f'{ARG_NAME}: {path}, rule {pattern!r}')
-    _rules_of_file[path] = rules
     return rules
 
 
@@ -125,26 +114,30 @@ def check_settings(settings: dict, where: Text) -> None:
             raise RuntimeError(f'{where}: {key} must be one of {list(choices)}, not {value!r}')
 
 
-def unmatched_rules() -> List[Tuple[Text, Text]]:
+def unmatched_rules(state: Dict[Text, Tuple[list, Set[Text]]]) -> List[Tuple[Text, Text]]:
     '''
-    Returns the (file, pattern) rules of the files read so far that matched no node
+    Returns the (file, pattern) rules of a launch that matched no node
     '''
-    return [(path, pattern) for path, rules in _rules_of_file.items() for pattern, _ in rules
-            if pattern not in _matched_patterns.get(path, set())]
+    return [(path, pattern) for path, (rules, matched) in state.items() for pattern, _ in rules
+            if pattern not in matched]
 
 
-def report_unmatched_rules() -> None:
+def launch_state(context: LaunchContext) -> Dict[Text, Tuple[list, Set[Text]]]:
     '''
-    Logs the rules that matched no node, once per launch process: a launch can shut down
-    several times over, e.g. when required nodes exit during the shutdown
+    Returns the rules this launch read, per file, with the patterns that matched a node.
+    Kept on the launch context, so that each launch starts afresh. The rules that matched
+    no node are logged once, when the launch shuts down.
     '''
-    global _reported
-    if _reported:
-        return
-    _reported = True
-    logger = get_logger('simple_launch')
-    for path, pattern in unmatched_rules():
-        logger.info(f'{ARG_NAME}: rule {pattern!r} of {path} matched no node')
+    state = getattr(context, '_simple_launch_config', None)
+    if state is None:
+        state = context._simple_launch_config = {}
+        logger = get_logger('simple_launch')
+        context.register_event_handler(OnShutdown(
+            on_shutdown=lambda event, context: [
+                logger.info(f'{ARG_NAME}: rule {pattern!r} of {path} matched no node')
+                for path, pattern in unmatched_rules(state)],
+            handle_once=True))
+    return state
 
 
 def resolve(rules: List[Tuple[Text, dict]], full_name: Text) -> NodeSettings:
@@ -207,16 +200,15 @@ def settings_of(context: LaunchContext, full_name: Text) -> NodeSettings:
     which rules matched it
     '''
     path = perform_substitutions(context, [LaunchConfiguration(ARG_NAME, default='')])
-    rules = load_rules(path)
+    if not path:
+        return resolve([], full_name)
+    path = os.path.abspath(os.path.expanduser(path))
+    state = launch_state(context)
+    if path not in state:
+        state[path] = (load_rules(path), set())
+    rules, matched = state[path]
     settings = resolve(rules, full_name)
-    if rules:
-        path = os.path.abspath(os.path.expanduser(path))
-        _matched_patterns.setdefault(path, set()).update(settings.rules)
-        if not getattr(context, '_simple_launch_report', False):
-            # once per launch
-            context._simple_launch_report = True
-            context.register_event_handler(OnShutdown(
-                on_shutdown=lambda event, context: report_unmatched_rules()))
+    matched.update(settings.rules)
     return settings
 
 

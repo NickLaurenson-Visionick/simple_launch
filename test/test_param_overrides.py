@@ -82,3 +82,14 @@ def test_launcher_does_not_declare_the_argument():
 
     assert not [action for action in actions
                 if isinstance(action, DeclareLaunchArgument) and action.name == 'param_overrides']
+
+
+def test_named_node_gets_its_sections_under_its_full_name(tmp_path):
+    a = write(tmp_path, 'a.yaml', {'/**': section(shared=1, rate=1.0),
+                                   '/**/mode_fsm': section(rate=2.0),
+                                   '/**/other': section(x=1)})
+
+    path = write_merged_file([a], out_dir=str(tmp_path), full_name='/brain/mode_fsm')
+
+    with open(path) as f:
+        assert yaml.safe_load(f) == {'/brain/mode_fsm': section(shared=1, rate=2.0)}

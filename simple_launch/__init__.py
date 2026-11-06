@@ -397,7 +397,8 @@ class SimpleLauncher:
         params = node_args.get('parameters', [])
         if not isinstance(params, list):
             params = [params]
-        node_args['parameters'] = params + [MergedOverrides()]
+        overrides = MergedOverrides()
+        node_args['parameters'] = params + [overrides]
 
         if as_composable:
             # check plugin name - add package if needed
@@ -410,7 +411,9 @@ class SimpleLauncher:
             return self.add_action(component)
 
         # basic node, with the settings of the launch_config file
-        return self.add_action(ConfiguredNode(package=package, executable=executable, **node_args))
+        node = ConfiguredNode(package=package, executable=executable, **node_args)
+        overrides.node = node
+        return self.add_action(node)
 
     def log_info(self, msg):
         '''

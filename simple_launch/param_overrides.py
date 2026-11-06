@@ -4,7 +4,14 @@ Parameter override files given to every node through the param_overrides launch 
 The argument is a space-separated list of YAML parameter files. They are merged in order,
 a later file winning over an earlier one, and the result is passed last to each node,
 after its own parameters.
+
+rcl applies parameter sections in the order their keys first appear, not file by file: a
+/**/<node> section of an override would land in the package file's earlier section, before the
+section launch_ros writes under the node's full name for the parameters a launch file gives.
+So a named node gets its overrides keyed by its full name, which comes after both.
 '''
+
+import copy
 
 import os
 import tempfile
@@ -62,16 +69,22 @@ def merge_override_files(paths: List[Text]) -> dict:
     return merged
 
 
-def write_merged_file(paths: List[Text], out_dir: Text = None) -> Text:
+def write_merged_file(paths: List[Text], out_dir: Text = None, full_name: Text = None) -> Text:
     '''
-    Merges the given files and writes the result, once per list of files and process.
+    Merges the given files and writes the result, once per list of files, node and process.
+    With a full node name, writes only the sections of that node, keyed by its full name.
     Returns the path of the written file. An empty list gives a file that sets nothing.
     '''
-    key = tuple(paths)
+    key = (tuple(paths), full_name)
     if key in _merged_files:
         return _merged_files[key]
 
     merged = merge_override_files(paths)
+    if full_name is not None:
+        params = {}
+        for section in ('/**', '/**/' + full_name.rsplit('/', 1)[-1]):
+            _deep_merge(params, copy.deepcopy(merged.get(section, {}).get('ros__parameters', {})))
+        merged = {full_name: {'ros__parameters': params}}
     if not merged:
         # a parameter file must hold at least one section
         merged = {'/**': {'ros__parameters': {}}}
@@ -84,7 +97,7 @@ def write_merged_file(paths: List[Text], out_dir: Text = None) -> Text:
         f.write(''.join(f'# {path}\n' for path in paths))
         yaml.safe_dump(merged, f, default_flow_style=False)
 
-    if paths:
+    if paths and full_name is None:
         get_logger('simple_launch').info(f'{ARG_NAME}: {" ".join(paths)} merged into {out_path}')
     _merged_files[key] = out_path
     return out_path
@@ -98,10 +111,16 @@ class MergedOverrides(Substitution):
     def __init__(self):
         super().__init__()
         self.__files = LaunchConfiguration(ARG_NAME, default='')
+        # the node these overrides are for, set once it is created; None for a composable node
+        self.node = None
 
     def describe(self) -> Text:
         return f'MergedOverrides({ARG_NAME})'
 
     def perform(self, context: LaunchContext) -> Text:
-        files = perform_substitutions(context, [self.__files]).split()
-        return write_merged_file([os.path.abspath(os.path.expanduser(f)) for f in files])
+        paths = [os.path.abspath(os.path.expanduser(f))
+                 for f in perform_substitutions(context, [self.__files]).split()]
+        if self.node is not None and self.node.is_node_name_fully_specified():
+            # performed with the parameters, once the node's name is resolved
+            return write_merged_file(paths, full_name=self.node.node_name)
+        return write_merged_file(paths)

@@ -331,3 +331,22 @@ def test_empty_debug_mapping_uses_the_defaults(tmp_path, fake_package):
     node._configure(context)
 
     assert prefix_of(node, context).startswith('gdbserver --once 127.0.0.1:')
+
+
+def test_log_level_mapping_sets_the_process_and_named_loggers(tmp_path):
+    config = write_config(tmp_path, {
+        '/motion/*': {'log_level': 'warn'},
+        '/motion/velocity_limiter': {'log_level': {'default': 'info', 'rcl': 'error'}},
+    })
+    node = ConfiguredNode(package='pkg', executable='exe', name='velocity_limiter')
+    context = context_for(config, '/motion')
+
+    node._configure(context)
+
+    # the later rule replaces the whole value
+    assert command(node, context)[-4:] == ['--log-level', 'info', '--log-level', 'rcl:=error']
+
+
+def test_log_level_mapping_checks_each_level(tmp_path):
+    with pytest.raises(RuntimeError, match="not 'loud'"):
+        load_rules(write_config(tmp_path, {'*': {'log_level': {'rcl': 'loud'}}}))

@@ -50,7 +50,8 @@ class NodeSettings:
 
     # false leaves the node out of the launch
     enabled: bool = field(default=True, metadata={'type': bool})
-    log_level: Optional[Text] = field(default=None, metadata={'type': str, 'choices': LOG_LEVELS})
+    # a level for the whole process, or {logger: level} where 'default' is the whole process
+    log_level: object = field(default=None, metadata={'type': (str, dict), 'choices': LOG_LEVELS})
     # true shuts the whole launch down when the node exits
     required: bool = field(default=False, metadata={'type': bool})
     # true starts the node again when it dies, after respawn_delay seconds
@@ -113,8 +114,9 @@ def check_settings(settings: dict, where: Text) -> None:
         if keys is not None and isinstance(value, dict) and set(value) - set(keys):
             raise RuntimeError(f'{where}: {key} takes only {list(keys)}, not {sorted(value)}')
         choices = known[key].get('choices')
-        if choices is not None and str(value).lower() not in choices:
-            raise RuntimeError(f'{where}: {key} must be one of {list(choices)}, not {value!r}')
+        for choice in (value.values() if isinstance(value, dict) else [value]):
+            if choices is not None and str(choice).lower() not in choices:
+                raise RuntimeError(f'{where}: {key} must be one of {list(choices)}, not {choice!r}')
 
 
 def unmatched_rules(state: Dict[Text, Tuple[list, Set[Text]]]) -> List[Tuple[Text, Text]]:
@@ -218,12 +220,19 @@ def settings_of(context: LaunchContext, full_name: Text) -> NodeSettings:
 def log_args(settings: NodeSettings, logger: Optional[Text] = None) -> List[List[TextSubstitution]]:
     '''
     Returns the --log-level arguments of a node's settings, none if they set no level.
-    Without a logger, the level is the default of the whole process, as for a node alone in it.
+    The 'default' level is the one of the whole process, as for a node alone in it, or of the
+    given logger for a component sharing its process. Other names are loggers of the process.
     '''
-    if not settings.log_level:
+    levels = settings.log_level
+    if not levels:
         return []
-    level = settings.log_level if logger is None else f'{logger}:={settings.log_level}'
-    return [[TextSubstitution(text='--log-level')], [TextSubstitution(text=level)]]
+    if not isinstance(levels, dict):
+        levels = {'default': levels}
+    args = []
+    for name, level in levels.items():
+        name = logger if name == 'default' else name
+        args += ['--log-level', level if name is None else f'{name}:={level}']
+    return [[TextSubstitution(text=arg)] for arg in args]
 
 
 def logger_name(full_name: Text) -> Text:
